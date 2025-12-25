@@ -19,9 +19,9 @@ BOLD='\033[1m'
 NC='\033[0m'
 
 # 0. Start
-printf -- "%b" "${L_BLUE}${BOLD}╔══════════════════════════════════════════════════════════╗${NC}\n"
-printf -- "%b" "${L_BLUE}${BOLD}║              PROXMOX ORPHANED BACKUP SCANNER             ║${NC}\n"
-printf -- "%b" "${L_BLUE}${BOLD}╚══════════════════════════════════════════════════════════╝${NC}\n\n"
+printf -- "%b" "${L_BLUE}${BOLD}╔═══════════════════════════════════════════════════════════╗${NC}\n"
+printf -- "%b" "${L_BLUE}${BOLD}║              PROXMOX ORPHANED BACKUP SCANNER              ║${NC}\n"
+printf -- "%b" "${L_BLUE}${BOLD}╚═══════════════════════════════════════════════════════════╝${NC}\n\n"
 
 # 1. Fetching Active Guests
 printf -- "%b" "${L_BLUE}▶ Step 1: Fetching Active Guests...${NC}\n"
@@ -103,7 +103,6 @@ if [ $ORPHAN_COUNT -gt 0 ]; then
     printf "${L_BLUE}║${NC} %-20s ${L_BLUE}│${NC} ${RED}%10s${NC} ${L_BLUE}│${NC}                      ${L_BLUE}║${NC}\n" "TOTAL ORPHANED FILES" "$ORPHAN_COUNT"
     printf "${L_BLUE}║${NC} %-20s ${L_BLUE}│${NC}            ${L_BLUE}│${NC} ${RED}%20s${NC} ${L_BLUE}║${NC}\n" "TOTAL RECLAIMABLE" "$TOTAL_ORPHAN_SIZE"
 else
-    # FIXED PADDING: 9 spaces + 39 text chars + 10 spaces = 58
     printf "${L_BLUE}║${NC}         ${GREEN}No orphaned backups found cluster-wide.${NC}          ${L_BLUE}║${NC}\n"
 fi
 printf -- "%b" "${L_BLUE}╚══════════════════════╧════════════╧══════════════════════╝${NC}\n"
