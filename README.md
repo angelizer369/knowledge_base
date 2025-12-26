@@ -45,8 +45,15 @@ General guidelines for running scripts:
 
 ```bash
 chmod +x ProxmoxVE/scripts/proxmox_orphaned_backup_scanner.sh
-./ProxmoxVE/scripts/proxmox_orphaned_backup_scanner.sh --help
+./proxmox_orphaned_backup_scanner.sh
 ```
+
+or
+
+```bash
+bash -c "$(curl -fsSL https://raw.githubusercontent.com/angelizer369/knowledge_base/refs/heads/main/ProxmoxVE/scripts/proxmox_orphaned_backup_scanner.sh)"
+```
+
 
 Run scripts with appropriate privileges (e.g., via `sudo`) only when you understand their effects.
 
