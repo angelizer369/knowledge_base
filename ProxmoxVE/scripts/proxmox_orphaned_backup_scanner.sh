@@ -4,7 +4,9 @@
 # License: MIT
 # https://github.com/angelizer369/knowledge_base/blob/main/LICENSE 
 
-
+# Description:
+# Scans Proxmox backup storage for files that appear to be orphaned 
+# (not associated with any current backup entries) and reports them for review.
 
 # =================================================================
 # Proxmox Orphaned Backup Scanner
