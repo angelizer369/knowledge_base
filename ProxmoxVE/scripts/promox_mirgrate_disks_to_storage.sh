@@ -35,6 +35,7 @@ DISK_LIST_FILTERED="/dev/shm/disklist_filtered"
 SUCCESS_COUNT=0
 FAILED_COUNT=0
 TOTAL_BYTES_MOVED=0
+TOTAL_TIME_SECONDS=0
 
 # --- Helper Functions ---
 
@@ -68,13 +69,33 @@ for i in "${!storages[@]}"; do
     printf "  [${YELLOW}%d${NC}] %s\n" "$((i + 1))" "${storages[$i]}"
 done
 
-read -p "Select SOURCE Index: " src_idx_input
-# Map input to internal array index (input - 1)
-SRC_STORAGE=${storages[$((src_idx_input - 1))]}
+# --- Source Storage Selection with Validation ---
+while true; do
+    read -p "Select SOURCE Index: " src_idx_input
+    # Validate if input is a number and within range
+    if [[ "$src_idx_input" =~ ^[0-9]+$ ]] && [ "$src_idx_input" -ge 1 ] && [ "$src_idx_input" -le "${#storages[@]}" ]; then
+        SRC_STORAGE=${storages[$((src_idx_input - 1))]}
+        break
+    else
+        printf -- "%b" "${RED}Invalid selection. Please enter a number between 1 and ${#storages[@]}.${NC}\n"
+    fi
+done
 
-read -p "Select DESTINATION Index: " dest_idx_input
-# Map input to internal array index (input - 1)
-DEST_STORAGE=${storages[$((dest_idx_input - 1))]}
+# --- Destination Storage Selection with Validation ---
+while true; do
+    read -p "Select DESTINATION Index: " dest_idx_input
+    # Validate if input is a number, within range, and not the same as source
+    if [[ "$dest_idx_input" =~ ^[0-9]+$ ]] && [ "$dest_idx_input" -ge 1 ] && [ "$dest_idx_input" -le "${#storages[@]}" ]; then
+        if [ "$dest_idx_input" -ne "$src_idx_input" ]; then
+            DEST_STORAGE=${storages[$((dest_idx_input - 1))]}
+            break
+        else
+            printf -- "%b" "${RED}Destination cannot be the same as the source. Please select a different storage.${NC}\n"
+        fi
+    else
+        printf -- "%b" "${RED}Invalid selection. Please enter a number between 1 and ${#storages[@]}.${NC}\n"
+    fi
+done
 
 [[ -z "$SRC_STORAGE" || -z "$DEST_STORAGE" ]] && failexit 1 "Invalid selection."
 [[ "$SRC_STORAGE" == "$DEST_STORAGE" ]] && failexit 2 "Source and Destination are the same."
@@ -138,15 +159,43 @@ echo -e "  [${YELLOW}1${NC}] All Disks"
 echo -e "  [${YELLOW}2${NC}] Only Online Guests (running)"
 echo -e "  [${YELLOW}3${NC}] Only Offline Guests (stopped)"
 echo -e "  [${YELLOW}4${NC}] Specific Disk IDs (e.g. 1 3 5)"
-read -p "Selection [1-4]: " filter_sel
+
+# --- Filter Selection with Validation ---
+while true; do
+    read -p "Selection [1-4]: " filter_sel
+    if [[ "$filter_sel" =~ ^[1-4]$ ]]; then
+        break
+    else
+        printf -- "%b" "${RED}Invalid selection. Please enter a number between 1 and 4.${NC}\n"
+    fi
+done
 
 selected_ids=""
-[[ "$filter_sel" == "4" ]] && read -p "Enter Disk IDs (space separated): " selected_ids
+if [[ "$filter_sel" == "4" ]]; then
+    while true; do
+        read -p "Enter Disk IDs (space separated): " selected_ids
+        # Validate that input contains only numbers and spaces
+        if [[ "$selected_ids" =~ ^[0-9\ ]+$ ]]; then
+            break
+        else
+            printf -- "%b" "${RED}Invalid input. Please enter only space-separated numbers.${NC}\n"
+        fi
+    done
+fi
 
 echo -e "\nProcessing Mode:"
 echo -e "  [${YELLOW}1${NC}] Bulk (Auto-confirm)"
 echo -e "  [${YELLOW}2${NC}] Interactive (Confirm each)"
-read -p "Selection [1-2]: " mode_sel
+
+# --- Mode Selection with Validation ---
+while true; do
+    read -p "Selection [1-2]: " mode_sel
+    if [[ "$mode_sel" =~ ^[1-2]$ ]]; then
+        break
+    else
+        printf -- "%b" "${RED}Invalid selection. Please enter a number between 1 and 2.${NC}\n"
+    fi
+done
 
 # Apply filters to disk list
 while read -r idx node type vmid disk size status; do
@@ -190,15 +239,25 @@ while read -r idx node type vmid disk size status; do
     
     # User interaction logic
     if [[ "$mode_sel" == "2" ]]; then
-        printf "${YELLOW}Confirm:${NC} Move [#%s] %s (%s) on Node '%s'? [Y/n]: " "$idx" "$disk" "$size" "$node"
-        read -r ans < /dev/tty
-        ans=$(echo "$ans" | tr '[:upper:]' '[:lower:]')
-        # Empty input (Enter) defaults to Yes
-        [[ -n "$ans" && "$ans" != "y" ]] && { printf "${YELLOW}⏭ Skipped${NC}\n"; continue; }
+        while true; do
+            printf "${YELLOW}Confirm:${NC} Move [#%s] %s (%s) on Node '%s'? [Y/n]: " "$idx" "$disk" "$size" "$node"
+            read -r ans < /dev/tty
+            ans=$(echo "$ans" | tr '[:upper:]' '[:lower:]')
+            # Allow 'y', 'n', or empty input
+            if [[ -z "$ans" || "$ans" == "y" || "$ans" == "n" ]]; then
+                break
+            else
+                printf -- "%b" "${RED}Invalid input. Please enter 'y' for yes, 'n' for no, or press Enter for yes.${NC}\n"
+            fi
+        done
+        # If 'n' is entered, skip to the next item
+        [[ "$ans" == "n" ]] && { printf "${YELLOW}⏭ Skipped${NC}\n"; continue; }
     fi
 
     echo "----------------------------------------------------------------"
     printf "Task %d/%d: [%s] Moving %s %s [%s]...\n" "$current" "$total_count" "$node" "$type" "$vmid" "$disk"
+
+    start_time=$(date +%s)
 
     # Execute migration via Proxmox API (pvesh) for cluster-wide routing
     if [[ "$type" == "qm" ]]; then
@@ -207,10 +266,14 @@ while read -r idx node type vmid disk size status; do
         pvesh create /nodes/"$node"/lxc/"$vmid"/move_volume --volume "$disk" --storage "$DEST_STORAGE" --delete 1
     fi
 
+    end_time=$(date +%s)
+    duration=$((end_time - start_time))
+
     # Check exit status of the API call and update statistics
     if [ $? -eq 0 ]; then
-        printf "${GREEN}${BOLD}✔ Task Finished${NC}\n" | tee -a "$LOG_DONE"
+        printf "${GREEN}${BOLD}✔ Task Finished in %s seconds${NC}\n" "$duration" | tee -a "$LOG_DONE"
         ((SUCCESS_COUNT++))
+        TOTAL_TIME_SECONDS=$((TOTAL_TIME_SECONDS + duration))
         
         # Add to total moved size
         unit=$(echo "$size" | grep -o "[A-Z]")
@@ -226,6 +289,8 @@ done < "$DISK_LIST_FILTERED"
 
 # --- STEP 6: Final Summary ---
 HUM_MOVED=$(echo "scale=2; $TOTAL_BYTES_MOVED / 1073741824" | bc)
+MINUTES=$((TOTAL_TIME_SECONDS / 60))
+SECONDS=$((TOTAL_TIME_SECONDS % 60))
 
 echo -e "\n----------------------------------------------------------------"
 echo -e "${L_BLUE}${BOLD}MIGRATION SUMMARY:${NC}"
@@ -233,5 +298,6 @@ echo -e "  Storages:      ${YELLOW}$SRC_STORAGE${NC} -> ${YELLOW}$DEST_STORAGE${
 echo -e "  Successful:    ${GREEN}$SUCCESS_COUNT${NC}"
 echo -e "  Failed:        ${RED}$FAILED_COUNT${NC}"
 echo -e "  Total Volume:  ${BOLD}$HUM_MOVED GB${NC}"
+echo -e "  Total Time:    ${BOLD}$MINUTES minutes and $SECONDS seconds${NC}"
 echo -e "----------------------------------------------------------------"
 printf -- "${GREEN}${BOLD}✔ Process completed.${NC}\n"
