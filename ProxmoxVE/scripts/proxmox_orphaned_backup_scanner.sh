@@ -120,8 +120,15 @@ if [ $ORPHAN_COUNT -gt 0 ]; then
         printf "Found: ${YELLOW}%-8s${NC} (%7s GB) on ${L_BLUE}%s${NC}\n" "$vVMID" "$vSIZE" "$sID"
         printf "File:  %s\n" "$vID"
 
-        read -p "  Delete this file? (Y/n): " confirm < /dev/tty
-        confirm=${confirm:-y}
+        while true; do
+            read -p "  Delete this file? (Y/n): " confirm < /dev/tty
+            confirm=${confirm:-y} # Default to 'y' if input is empty
+            if [[ "$confirm" =~ ^[YyNn]$ ]]; then
+                break
+            else
+                printf -- "%b" "${RED}Invalid input. Please enter 'y' for yes or 'n' for no.${NC}\n"
+            fi
+        done
 
         if [[ "$confirm" =~ ^[Yy]$ ]]; then
             printf "  ${RED}Removing...${NC} "
