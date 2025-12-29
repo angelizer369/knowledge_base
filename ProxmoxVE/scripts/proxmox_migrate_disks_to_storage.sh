@@ -13,12 +13,12 @@
 # =================================================================
 
 # --- Color Definitions ---
-GREEN='\033[0;32m'
-YELLOW='\033[1;33m'
-RED='\033[0;31m'
-L_BLUE='\033[1;34m'
-BOLD='\033[1m'
-NC='\033[0m'
+GREEN=$'\033[0;32m'
+YELLOW=$'\033[1;33m'
+RED=$'\033[0;31m'
+L_BLUE=$'\033[1;34m'
+BOLD=$'\033[1m'
+NC=$'\033[0m' 
 
 # --- Script Header ---
 printf -- "%b" "${L_BLUE}${BOLD}╔═══════════════════════════════════════════════════════════╗${NC}\n"
@@ -55,6 +55,17 @@ to_bytes() {
         K|KB|k) echo "$value * 1024" | bc ;;
         *) echo "$value" ;;
     esac
+}
+
+# Convert bytes to a human-readable string (eg. 1.23 GiB)
+bytes_human() {
+    local bytes=$1
+    if [[ -z "$bytes" || "$bytes" -eq 0 ]]; then
+        echo "0 B"
+        return
+    fi
+    # Use awk for floating point conversion
+    echo "$bytes" | awk 'function human(x){s="B KiB MiB GiB TiB PiB"; split(s,arr); i=1; while(x>=1024 && i<6){x/=1024;i++} return sprintf("%.2f %s", x, arr[i])} {print human($0)}'
 }
 
 # --- Initialization ---
@@ -105,12 +116,15 @@ printf -- "\n%b" "${L_BLUE}▶ Step 2: Fetching Guests & Scanning for '$SRC_STOR
 GUEST_DATA_RAW=$(pvesh get /cluster/resources --type vm --output-format json)
 
 # Table Header
-printf "${BOLD}%5s   %-10s %-6s %8s   %-10s %-25s %-10s %8s${NC}\n" "IDX" "NODE" "TYPE" "VMID" "STATUS" "NAME" "DISK" "SIZE"
+printf "${BOLD}%5s   %-10s %-6s %8s   %-25s${NC}\n" "IDX" "NODE" "TYPE" "VMID" "STATUS/NAME"
 echo "----------------------------------------------------------------------------------------------------"
 
 global_idx=0
 
-# Parse JSON data and find disks on source storage
+# Parse JSON data and collect disk entries for grouping
+DISK_TMP_RAW="/dev/shm/disklist_tmp_raw"
+rm -f "$DISK_TMP_RAW" "$DISK_LIST_RAW"
+
 while read -r line; do
     vmid=$(echo "$line" | grep -o '"vmid":[0-9]*' | cut -d: -f2)
     node=$(echo "$line" | grep -o '"node":"[^"]*"' | cut -d'"' -f4)
@@ -127,31 +141,140 @@ while read -r line; do
 
     # Check if config contains the source storage
     if [[ -f "$conf_file" ]] && grep -q "$SRC_STORAGE:" "$conf_file"; then
-        d_status="$status"
-        [[ "$status" == "running" ]] && d_status="${GREEN}running${NC}"
-        [[ "$status" == "stopped" ]] && d_status="${RED}stopped${NC}"
-        
         # Get individual disk lines (exclude unused disks if needed)
         disk_lines=$(grep "$SRC_STORAGE:" "$conf_file" | grep -v "unused")
-        
-        while read -r dline; do
+        [[ -z "$disk_lines" ]] && continue
+
+        # Save each disk as a pipe-separated record for later sorting/grouping
+        mapfile -t disk_arr <<< "$disk_lines"
+        for dline in "${disk_arr[@]}"; do
             [[ -z "$dline" ]] && continue
             disk=$(echo "$dline" | cut -d: -f1)
             size_str=$(echo "$dline" | grep -o "size=[0-9]*[G|M|K|T]*" | cut -d= -f2)
             [[ -z "$size_str" ]] && continue
-
-            ((global_idx++))
-            # Format output: Node alignment fixed to dynamic width
-            printf "[${YELLOW}%3d${NC}]  %-10s %-6s ${YELLOW}%8s${NC}   %-19b %-25s %-10s %8s\n" \
-                "$global_idx" "$node" "[$type]" "$vmid" "$d_status" "${name:0:24}" "$disk" "$size_str"
-            
-            # Save data for filtering step
-            echo "$global_idx $node $type $vmid $disk $size_str $status" >> "$DISK_LIST_RAW"
-        done <<< "$disk_lines"
+            printf "%s|%s|%s|%s|%s|%s|%s\n" "$node" "$type" "$vmid" "${name:0:24}" "$status" "$disk" "$size_str" >> "$DISK_TMP_RAW"
+        done
     fi
 done < <(echo "$GUEST_DATA_RAW" | sed 's/},{/}\n{/g' | sed 's/[\[{}]//g')
 
-[[ ! -s "$DISK_LIST_RAW" ]] && failexit 0 "No disks found on '$SRC_STORAGE'."
+[[ ! -s "$DISK_TMP_RAW" ]] && failexit 0 "No disks found on '$SRC_STORAGE'."
+
+# Sort by node then by VMID (numeric)
+sort -t'|' -k1,1 -k3,3n "$DISK_TMP_RAW" > "${DISK_TMP_RAW}.sorted"
+
+# Build grouped structures (node -> vm -> disks)
+declare -A vm_disks
+declare -A vm_counts
+declare -A vm_name
+declare -A vm_status
+declare -A vm_type
+declare -A vm_bytes
+declare -A node_vms
+# Per-node accumulators
+declare -A node_bytes
+declare -A node_disk_count
+nodes_order=()
+
+while IFS='|' read -r node type vmid name status disk size; do
+    key="$node|$vmid"
+    # track node order
+    if [[ -z "${node_vms[$node]}" ]]; then
+        nodes_order+=("$node")
+    fi
+    # append vmid to node's vm list (ensure uniqueness)
+    if [[ ! " ${node_vms[$node]} " =~ " $vmid " ]]; then
+        node_vms[$node]="${node_vms[$node]} $vmid"
+    fi
+    # append disk line to vm_disks
+    vm_disks[$key]="${vm_disks[$key]}${disk}|${size}\n"
+    vm_counts[$key]=$(( ${vm_counts[$key]:-0} + 1 ))
+
+    # accumulate bytes for this VM
+    val=$(echo "$size" | grep -o "[0-9]*")
+    unit=$(echo "$size" | grep -o "[A-Za-z]*")
+    if [[ -n "$val" ]]; then
+        db=$(to_bytes "$val" "$unit")
+        vm_bytes[$key]=$(echo "${vm_bytes[$key]:-0} + $db" | bc)
+        # accumulate into node totals as well
+        node_bytes[$node]=$(echo "${node_bytes[$node]:-0} + $db" | bc)
+        node_disk_count[$node]=$(( ${node_disk_count[$node]:-0} + 1 ))
+    fi
+
+    vm_name[$key]="$name"
+    vm_status[$key]="$status"
+    vm_type[$key]="$type"
+done < "${DISK_TMP_RAW}.sorted"
+
+# Print grouped tree (Node -> VM -> Disks) and recreate $DISK_LIST_RAW with new indices
+global_idx=0
+for node in "${nodes_order[@]}"; do
+    node_total_disks=${node_disk_count[$node]:-0}
+    node_total_bytes=${node_bytes[$node]:-0}
+    node_total_hr=$(bytes_human "$node_total_bytes")
+    printf "${L_BLUE}${BOLD}Node: %-12s  (%2d disks, %s)${NC}\n" "$node" "$node_total_disks" "$node_total_hr"
+
+    # prepare vm list for this node
+    vmids=( ${node_vms[$node]} )
+    vm_count=${#vmids[@]}
+    for j in "${!vmids[@]}"; do
+        vmid=${vmids[$j]}
+        key="$node|$vmid"
+        type=${vm_type[$key]}
+        name=${vm_name[$key]}
+        status=${vm_status[$key]}
+
+        # colored status for display
+        d_status="$status"
+        [[ "$status" == "running" ]] && d_status="${GREEN}running${NC}"
+        [[ "$status" == "stopped" ]] && d_status="${RED}stopped${NC}"
+
+        # Disk count (singular/plural) and total size
+        count=${vm_counts[$key]:-0}
+        total_bytes=${vm_bytes[$key]:-0}
+        total_hr=$(bytes_human "$total_bytes")
+        if [ "$count" -eq 1 ]; then
+            disks_label="1 disk"
+        else
+            disks_label="$count disks"
+        fi
+
+        # choose vm branch char
+        if [ "$j" -lt $((vm_count - 1)) ]; then
+            vm_branch="├─"
+            vm_indent_prefix="│  "
+        else
+            vm_branch="└─"
+            vm_indent_prefix="   "
+        fi
+
+        printf "%s ${BOLD}%-4s %-6s %-12s %-12s %-12s %s${NC}\n" "$vm_branch" "[$type]" "$vmid" "$disks_label" "$total_hr" "$d_status" "${name:0:30}"
+
+        # split disk lines
+        IFS=$'\n' read -r -d '' -a lines <<< "$(printf "%b" "${vm_disks[$key]}")" || true
+        for i in "${!lines[@]}"; do
+            line="${lines[$i]}"
+            [[ -z "$line" ]] && continue
+            disk=$(echo "$line" | cut -d'|' -f1)
+            size=$(echo "$line" | cut -d'|' -f2)
+
+            ((global_idx++))
+            if [ "$i" -lt $((${#lines[@]} - 1)) ]; then
+                disk_branch="├─"
+            else
+                disk_branch="└─"
+            fi
+
+            printf "%s [${YELLOW}%3d${NC}] %s %-15s %8s\n" "$vm_indent_prefix" "$global_idx" "$disk_branch" "$disk" "$size"
+
+            # Save data for filtering step (plain status)
+            echo "$global_idx $node $type $vmid $disk $size $status" >> "$DISK_LIST_RAW"
+        done
+    done
+done
+
+# cleanup
+rm -f "${DISK_TMP_RAW}.sorted" "$DISK_TMP_RAW"
+
 
 # --- STEP 3: Migration Filters ---
 printf -- "\n%b" "${L_BLUE}▶ Step 3: Select Migration Scope...${NC}\n"
