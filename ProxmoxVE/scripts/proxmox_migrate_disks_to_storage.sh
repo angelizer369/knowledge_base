@@ -72,6 +72,11 @@ bytes_human() {
 rm -f "$DISK_LIST_RAW" "$DISK_LIST_FILTERED"
 
 # --- STEP 1: Storage Selection ---
+# Check for jq
+if ! command -v jq &> /dev/null; then
+    failexit 1 "jq is required but not installed. Please run 'apt-get install jq'."
+fi
+
 printf -- "%b" "${L_BLUE}▶ Step 1: Selecting Storages...${NC}\n"
 mapfile -t storages < <(pvesm status | awk 'NR>1 {print $1}')
 
@@ -125,12 +130,7 @@ global_idx=0
 DISK_TMP_RAW="/dev/shm/disklist_tmp_raw"
 rm -f "$DISK_TMP_RAW" "$DISK_LIST_RAW"
 
-while read -r line; do
-    vmid=$(echo "$line" | grep -o '"vmid":[0-9]*' | cut -d: -f2)
-    node=$(echo "$line" | grep -o '"node":"[^"]*"' | cut -d'"' -f4)
-    status=$(echo "$line" | grep -o '"status":"[^"]*"' | cut -d'"' -f4)
-    name=$(echo "$line" | grep -o '"name":"[^"]*"' | cut -d'"' -f4)
-    type_raw=$(echo "$line" | grep -o '"type":"[^"]*"' | cut -d'"' -f4)
+while IFS=$'\t' read -r vmid node status name type_raw; do
 
     # Determine guest type and config path
     if [[ "$type_raw" == "qemu" ]]; then
@@ -155,7 +155,7 @@ while read -r line; do
             printf "%s|%s|%s|%s|%s|%s|%s\n" "$node" "$type" "$vmid" "${name:0:24}" "$status" "$disk" "$size_str" >> "$DISK_TMP_RAW"
         done
     fi
-done < <(echo "$GUEST_DATA_RAW" | sed 's/},{/}\n{/g' | sed 's/[\[{}]//g')
+done < <(echo "$GUEST_DATA_RAW" | jq -r '.[] | [.vmid, .node, .status, .name, .type] | @tsv')
 
 [[ ! -s "$DISK_TMP_RAW" ]] && failexit 0 "No disks found on '$SRC_STORAGE'."
 

@@ -40,6 +40,11 @@ failexit() {
 
 # --- Main Execution ---
 
+# Check for jq
+if ! command -v jq &> /dev/null; then
+    failexit 1 "jq is required but not installed. Please run 'apt-get install jq'."
+fi
+
 # Rescan all disks
 printf -- "%b" "${L_BLUE}▶ Running qm disk rescan...${NC}
 "
@@ -61,12 +66,7 @@ found_unused_in_config=0
 global_idx=0
 
 # Parse guest data
-while read -r line; do
-    vmid=$(echo "$line" | grep -o '"vmid":[0-9]*' | cut -d: -f2)
-    node=$(echo "$line" | grep -o '"node":"[^" ]*"' | cut -d'"' -f4)
-    type_raw=$(echo "$line" | grep -o '"type":"[^" ]*"' | cut -d'"' -f4)
-    name=$(echo "$line" | grep -o '"name":"[^" ]*"' | cut -d'"' -f4)
-    status=$(echo "$line" | grep -o '"status":"[^" ]*"' | cut -d'"' -f4)
+while IFS=$'\t' read -r vmid node type_raw name status; do
 
     if [[ "$type_raw" == "qemu" ]]; then
         conf_file="/etc/pve/nodes/$node/qemu-server/$vmid.conf"
@@ -94,7 +94,7 @@ while read -r line; do
             fi
         done < <(grep -E "^unused[0-9]*:" "$conf_file")
     fi
-done < <(echo "$GUEST_DATA" | sed 's/},{/}\n{/g' | sed 's/[\\\[{}]//g')
+done < <(echo "$GUEST_DATA" | jq -r '.[] | [.vmid, .node, .type, .name, .status] | @tsv')
 
 # Display Results
 if [[ $found_unused_in_config -eq 0 ]]; then
@@ -208,5 +208,3 @@ fi
 
 printf -- "\n%b" "${L_BLUE}▶ Scan Complete${NC}\n\n"
 printf -- "${GREEN}${BOLD}✔ Unused disk check finished.${NC}\n"
-
-

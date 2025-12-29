@@ -26,20 +26,18 @@ printf -- "%b" "${L_BLUE}${BOLD}║              PROXMOX ORPHANED BACKUP SCANNER
 printf -- "%b" "${L_BLUE}${BOLD}╚═══════════════════════════════════════════════════════════╝${NC}\n\n"
 
 # 1. Fetching Active Guests
+# Check for jq
+if ! command -v jq &> /dev/null; then
+    printf -- "%b" "${RED}Error: 'jq' is required but not installed. Please run 'apt-get install jq'.${NC}\n"
+    exit 1
+fi
+
 printf -- "%b" "${L_BLUE}▶ Step 1: Fetching Active Guests...${NC}\n"
 GUEST_DATA_RAW=$(pvesh get /cluster/resources --type vm --output-format json)
 
-GUEST_LIST=$(echo "$GUEST_DATA_RAW" | sed 's/},{/}\n{/g' | awk -F',' '
-    {
-        vmid=""; name="";
-        for(i=1; i<=NF; i++) {
-            if($i ~ /"vmid"/) { split($i, a, ":"); vmid=a[2]; gsub(/[^0-9]/, "", vmid); }
-            if($i ~ /"name"/) { split($i, b, ":"); name=b[2]; gsub(/["]/, "", name); }
-        }
-        if(vmid != "") print vmid " [" name "]"
-    }' | sort -n)
+GUEST_LIST=$(echo "$GUEST_DATA_RAW" | jq -r '.[] | "\(.vmid) [\(.name)]"' | sort -n)
 
-EXISTING_IDS=$(echo "$GUEST_LIST" | awk '{print $1}' | tr '\n' ' ')
+EXISTING_IDS=$(echo "$GUEST_DATA_RAW" | jq -r '.[].vmid' | tr '\n' ' ')
 
 echo "$GUEST_LIST" | awk '{printf "  ├─ ID: %-8s Name: %s\n", $1, $2}'
 printf "%s\n" "  └────────────────────────────────────────────────────────"

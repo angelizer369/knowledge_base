@@ -17,6 +17,12 @@ NC='\033[0m'
 
 # Function to fetch scripts from GitHub
 fetch_scripts() {
+    # Check if jq is installed
+    if ! command -v jq &> /dev/null; then
+        echo -e "${RED}Error: 'jq' is required but not installed. Please run 'apt-get install jq'.${NC}"
+        return 1
+    fi
+
     echo -e "${L_BLUE}▶ Fetching scripts from GitHub...${NC}"
     api_url="https://api.github.com/repos/angelizer369/knowledge_base/contents/ProxmoxVE/scripts"
     
@@ -27,8 +33,8 @@ fetch_scripts() {
         return 1
     fi
     
-    # Use grep and cut to parse JSON, grep for .sh files, and exclude the menu script itself
-    mapfile -t scripts < <(echo "$script_list_json" | grep '"name":' | cut -d'"' -f4 | grep '\.sh$' | grep -v "proxmox__scripts_main_menu.sh")
+    # Use jq to parse JSON, filter for .sh files, and exclude the menu script itself
+    mapfile -t scripts < <(echo "$script_list_json" | jq -r '.[] | select(.name | endswith(".sh")) | select(.name != "proxmox__scripts_main_menu.sh") | .name')
     
     if [ ${#scripts[@]} -eq 0 ]; then
         echo -e "${YELLOW}No scripts found on GitHub.${NC}"
@@ -89,7 +95,20 @@ while true; do
         echo -e "\n${GREEN}Executing $selected_script from GitHub...${NC}"
         echo "-------------------------------------------------------------"
         base_url="https://raw.githubusercontent.com/angelizer369/knowledge_base/main/ProxmoxVE/scripts"
-        bash -c "$(curl -fsSL $base_url/$selected_script)"
+        
+        # Create a temporary file
+        temp_script=$(mktemp /tmp/proxmox_script_XXXXXX.sh)
+        
+        # Download script to temp file
+        if curl -fsSL "$base_url/$selected_script" -o "$temp_script"; then
+            chmod +x "$temp_script"
+            bash "$temp_script"
+        else
+            echo -e "${RED}Error: Failed to download script.${NC}"
+        fi
+        
+        # Cleanup
+        rm -f "$temp_script"
         echo "-------------------------------------------------------------"
         echo -e "${GREEN}$selected_script finished. Press the [Enter] key to return to the main menu...${NC}"
         read -p ""
