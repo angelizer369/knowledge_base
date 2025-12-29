@@ -4,7 +4,7 @@ This directory contains shell scripts for automating tasks in Proxmox VE.
 
 ## Scripts
 
-### `promox_mirgrate_disks_to_storage.sh`
+### `proxmox_migrate_disks_to_storage.sh`
 
 This script migrates all disks of a virtual machine to a specified storage.
 
@@ -13,7 +13,7 @@ This script migrates all disks of a virtual machine to a specified storage.
 To run this script directly from the web, use the following command:
 
 ```bash
-bash -c "$(curl -fsSL https://raw.githubusercontent.com/angelizer369/knowledge_base/refs/heads/main/ProxmoxVE/scripts/promox_mirgrate_disks_to_storage.sh)"
+bash -c "$(curl -fsSL https://raw.githubusercontent.com/angelizer369/knowledge_base/refs/heads/main/ProxmoxVE/scripts/proxmox_migrate_disks_to_storage.sh)"
 ```
 
 ### `proxmox_orphaned_backup_scanner.sh`
