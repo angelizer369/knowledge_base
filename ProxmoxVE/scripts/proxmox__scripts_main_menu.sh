@@ -27,8 +27,8 @@ fetch_scripts() {
         return 1
     fi
     
-    # Use jq to parse JSON, grep for .sh files, and exclude the menu script itself
-    mapfile -t scripts < <(echo "$script_list_json" | jq -r '.[] | .name' | grep '\.sh$' | grep -v "proxmox__scripts_main_menu.sh")
+    # Use grep and cut to parse JSON, grep for .sh files, and exclude the menu script itself
+    mapfile -t scripts < <(echo "$script_list_json" | grep '"name":' | cut -d'"' -f4 | grep '\.sh$' | grep -v "proxmox__scripts_main_menu.sh")
     
     if [ ${#scripts[@]} -eq 0 ]; then
         echo -e "${YELLOW}No scripts found on GitHub.${NC}"
