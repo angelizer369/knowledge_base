@@ -12,7 +12,7 @@ show_menu() {
     scripts=()
     i=1
     for file in *.sh; do
-        if [[ "$file" != "main_menu.sh" ]]; then
+        if [[ "$file" != "proxmox__scripts_main_menu.sh" ]]; then
             echo "$i) $file"
             scripts+=("$file")
             ((i++))

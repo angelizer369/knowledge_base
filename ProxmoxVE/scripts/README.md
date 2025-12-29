@@ -4,6 +4,18 @@ This directory contains shell scripts for automating tasks in Proxmox VE.
 
 ## Scripts
 
+### `proxmox__scripts_main_menu.sh`
+
+This script provides a main menu to dynamically list and run all scripts in this folder.
+
+**Usage:**
+
+To run this script directly from the web, use the following command:
+
+```bash
+bash -c "$(curl -fsSL https://raw.githubusercontent.com/angelizer369/knowledge_base/refs/heads/main/ProxmoxVE/scripts/proxmox__scripts_main_menu.sh)"
+```
+
 ### `proxmox_migrate_disks_to_storage.sh`
 
 This script migrates all disks of a virtual machine to a specified storage.
