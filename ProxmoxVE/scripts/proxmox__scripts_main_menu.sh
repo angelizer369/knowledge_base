@@ -91,11 +91,11 @@ while true; do
         base_url="https://raw.githubusercontent.com/angelizer369/knowledge_base/main/ProxmoxVE/scripts"
         bash -c "$(curl -fsSL $base_url/$selected_script)"
         echo "-------------------------------------------------------------"
-        echo -e "${GREEN}$selected_script finished. Press Enter to return to the menu.${NC}"
+        echo -e "${GREEN}$selected_script finished. Press the [Enter] key to return to the main menu...${NC}"
         read -p ""
     else
         echo -e "\n${RED}Error: Script not found.${NC}"
-        echo -e "${RED}Press Enter to return to the menu.${NC}"
+        echo -e "${RED}Press the [Enter] key to return to the main menu...${NC}"
         read -p ""
     fi
 done
