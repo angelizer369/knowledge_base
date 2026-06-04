@@ -15,26 +15,40 @@ L_BLUE='\033[1;34m'
 BOLD='\033[1m'
 NC='\033[0m'
 
-# Function to fetch scripts from GitHub
-fetch_scripts() {
-    # Check if jq is installed
-    if ! command -v jq &> /dev/null; then
-        echo -e "${RED}Error: 'jq' is required but not installed. Please run 'apt-get install jq'.${NC}"
+# Check required commands before doing network work.
+require_commands() {
+    local missing=()
+    local cmd
+    for cmd in "$@"; do
+        command -v "$cmd" >/dev/null 2>&1 || missing+=("$cmd")
+    done
+
+    if [ "${#missing[@]}" -gt 0 ]; then
+        echo -e "${RED}Error: missing required command(s): ${missing[*]}.${NC}"
+        echo -e "${YELLOW}Install them first, then rerun this menu.${NC}"
         return 1
     fi
+}
+
+# Function to fetch scripts from GitHub
+fetch_scripts() {
+    require_commands curl jq mktemp chmod clear sleep || return 1
 
     echo -e "${L_BLUE}▶ Fetching scripts from GitHub...${NC}"
     api_url="https://api.github.com/repos/angelizer369/knowledge_base/contents/ProxmoxVE/scripts"
     
     # Fetch the directory listing
-    script_list_json=$(curl -s "$api_url")
+    script_list_json=$(curl -fsSL "$api_url")
     if [ -z "$script_list_json" ]; then
         echo -e "${RED}Error: Could not fetch script list from GitHub.${NC}"
         return 1
     fi
     
     # Use jq to parse JSON, filter for .sh files, and exclude the menu script itself
-    mapfile -t scripts < <(echo "$script_list_json" | jq -r '.[] | select(.name | endswith(".sh")) | select(.name != "proxmox__scripts_main_menu.sh") | .name')
+    if ! mapfile -t scripts < <(echo "$script_list_json" | jq -r '.[] | select(.name | endswith(".sh")) | select(.name != "proxmox__scripts_main_menu.sh") | .name'); then
+        echo -e "${RED}Error: Could not parse GitHub script list.${NC}"
+        return 1
+    fi
     
     if [ ${#scripts[@]} -eq 0 ]; then
         echo -e "${YELLOW}No scripts found on GitHub.${NC}"

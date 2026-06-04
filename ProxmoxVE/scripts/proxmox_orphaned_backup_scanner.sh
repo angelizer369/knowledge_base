@@ -25,12 +25,21 @@ printf -- "%b" "${L_BLUE}${BOLD}╔═══════════════
 printf -- "%b" "${L_BLUE}${BOLD}║              PROXMOX ORPHANED BACKUP SCANNER              ║${NC}\n"
 printf -- "%b" "${L_BLUE}${BOLD}╚═══════════════════════════════════════════════════════════╝${NC}\n\n"
 
+require_commands() {
+    local missing=()
+    local cmd
+    for cmd in "$@"; do
+        command -v "$cmd" >/dev/null 2>&1 || missing+=("$cmd")
+    done
+
+    if [ "${#missing[@]}" -gt 0 ]; then
+        printf -- "%b" "${RED}Error: missing required command(s): ${missing[*]}.${NC}\n"
+        exit 1
+    fi
+}
+
 # 1. Fetching Active Guests
-# Check for jq
-if ! command -v jq &> /dev/null; then
-    printf -- "%b" "${RED}Error: 'jq' is required but not installed. Please run 'apt-get install jq'.${NC}\n"
-    exit 1
-fi
+require_commands jq pvesh pvesm awk grep sed sort tr
 
 printf -- "%b" "${L_BLUE}▶ Step 1: Fetching Active Guests...${NC}\n"
 GUEST_DATA_RAW=$(pvesh get /cluster/resources --type vm --output-format json)
@@ -71,7 +80,7 @@ for STORAGE in $STORAGES; do
             fi
             VMID=$(echo "$VOLID" | sed -n 's/.*-\(qemu\|lxc\|openvz\)-\([0-9]*\)-.*/\2/p')
             [ -z "$VMID" ] && continue
-            if [[ ! " $EXISTING_IDS " =~ " $VMID " ]]; then
+            if [[ " $EXISTING_IDS " != *" $VMID "* ]]; then
                 SIZE_GB=$(awk -v s="${SIZE_BYTES:-0}" 'BEGIN { printf "%.2f", s/1024/1024/1024 }')
                 printf "  ${RED}✖${NC} ID: ${YELLOW}%-8s${NC} │ Size: ${YELLOW}%9s GB${NC} │ File: %s\n" "$VMID" "$SIZE_GB" "$VOLID"
                 STORAGE_ORPHAN_FOUND=true
@@ -95,7 +104,7 @@ printf -- "%b" "${L_BLUE}╠═════════════════�
 printf -- "%b" "${L_BLUE}║${NC}  ${BOLD}Storage${NC}             ${L_BLUE}│${NC}    ${BOLD}Files${NC}   ${L_BLUE}│${NC}      ${BOLD}Space (GB)${NC}      ${L_BLUE}║${NC}\n"
 printf -- "%b" "${L_BLUE}╟──────────────────────┼────────────┼──────────────────────╢${NC}\n"
 
-if [ $ORPHAN_COUNT -gt 0 ]; then
+if [ "$ORPHAN_COUNT" -gt 0 ]; then
     echo -e "$BREAKDOWN_LOG" | sed '/^$/d' | while IFS='|' read -r sNAME sCOUNT sSIZE; do
         printf "${L_BLUE}║${NC} %-20s ${L_BLUE}│${NC} %10s ${L_BLUE}│${NC} %20s ${L_BLUE}║${NC}\n" "$sNAME" "$sCOUNT" "$sSIZE"
     done
@@ -108,9 +117,9 @@ fi
 printf -- "%b" "${L_BLUE}╚══════════════════════╧════════════╧══════════════════════╝${NC}\n"
 
 # 5. Granular Cleanup Mode
-if [ $ORPHAN_COUNT -gt 0 ]; then
+if [ "$ORPHAN_COUNT" -gt 0 ]; then
     printf "\n%b" "${L_BLUE}▶ Step 3: Granular Cleanup Mode${NC}\n"
-    printf "You will be asked for each file. Press ${BOLD}Enter${NC} for 'yes', or type ${BOLD}'n'${NC} to skip.\n"
+    printf "You will be asked for each file. Type ${BOLD}'y'${NC} to delete, or press ${BOLD}Enter${NC} to skip.\n"
     echo "------------------------------------------------------------"
 
     while IFS='|' read -r sID vID vVMID vSIZE; do
@@ -119,8 +128,8 @@ if [ $ORPHAN_COUNT -gt 0 ]; then
         printf "File:  %s\n" "$vID"
 
         while true; do
-            read -p "  Delete this file? (Y/n): " confirm < /dev/tty
-            confirm=${confirm:-y} # Default to 'y' if input is empty
+            read -p "  Delete this file? (y/N): " confirm < /dev/tty
+            confirm=${confirm:-n} # Default to 'n' if input is empty
             if [[ "$confirm" =~ ^[YyNn]$ ]]; then
                 break
             else

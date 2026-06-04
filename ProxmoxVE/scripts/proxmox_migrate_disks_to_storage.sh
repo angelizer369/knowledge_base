@@ -28,8 +28,10 @@ printf -- "%b" "${L_BLUE}${BOLD}╚═══════════════
 # --- Configuration & Paths ---
 LOG_DONE="$HOME/proxmox-migrate-storage.log"
 LOG_ERR="$HOME/proxmox-migrate-storage-err.log"
-DISK_LIST_RAW="/dev/shm/disklist_raw"
-DISK_LIST_FILTERED="/dev/shm/disklist_filtered"
+DISK_LIST_RAW=""
+DISK_LIST_FILTERED=""
+DISK_TMP_RAW=""
+TASK_WAIT_TIMEOUT_SECONDS=${TASK_WAIT_TIMEOUT_SECONDS:-86400}
 
 # --- Summary Variables ---
 SUCCESS_COUNT=0
@@ -43,6 +45,23 @@ TOTAL_TIME_SECONDS=0
 failexit() {
     printf -- "%b" "${RED}${BOLD}!!! ERROR: $2 (Code: $1) !!!${NC}\n" | tee -a "$LOG_ERR"
     exit "$1"
+}
+
+cleanup() {
+    rm -f "$DISK_LIST_RAW" "$DISK_LIST_FILTERED" "$DISK_TMP_RAW" "${DISK_TMP_RAW}.sorted"
+}
+trap cleanup EXIT
+
+require_commands() {
+    local missing=()
+    local cmd
+    for cmd in "$@"; do
+        command -v "$cmd" >/dev/null 2>&1 || missing+=("$cmd")
+    done
+
+    if [ "${#missing[@]}" -gt 0 ]; then
+        failexit 1 "Missing required command(s): ${missing[*]}"
+    fi
 }
 
 # Convert various size units to bytes for calculation
@@ -68,14 +87,44 @@ bytes_human() {
     echo "$bytes" | awk 'function human(x){s="B KiB MiB GiB TiB PiB"; split(s,arr); i=1; while(x>=1024 && i<6){x/=1024;i++} return sprintf("%.2f %s", x, arr[i])} {print human($0)}'
 }
 
+wait_for_task() {
+    local node=$1
+    local upid=$2
+    local status_json
+    local status
+    local exitstatus
+    local start_time
+    local now
+
+    start_time=$(date +%s)
+    printf "  Waiting for Proxmox task: %s\n" "$upid"
+    while true; do
+        status_json=$(pvesh get "/nodes/$node/tasks/$upid/status" --output-format json 2>/dev/null || true)
+        status=$(printf "%s\n" "$status_json" | jq -r '.status // empty' 2>/dev/null)
+        exitstatus=$(printf "%s\n" "$status_json" | jq -r '.exitstatus // empty' 2>/dev/null)
+
+        if [[ "$status" == "stopped" ]]; then
+            [[ "$exitstatus" == "OK" ]] && return 0
+            printf "${RED}Task stopped with exitstatus: %s${NC}\n" "${exitstatus:-unknown}"
+            return 1
+        fi
+
+        now=$(date +%s)
+        if (( now - start_time > TASK_WAIT_TIMEOUT_SECONDS )); then
+            printf "${RED}Timed out waiting for task after %s seconds.${NC}\n" "$TASK_WAIT_TIMEOUT_SECONDS"
+            return 1
+        fi
+
+        sleep 2
+    done
+}
+
 # --- Initialization ---
-rm -f "$DISK_LIST_RAW" "$DISK_LIST_FILTERED"
+require_commands jq pvesh pvesm bc awk grep sort wc date mktemp cut tail sleep tee tr
+DISK_LIST_RAW=$(mktemp /dev/shm/disklist_raw.XXXXXX) || failexit 1 "Could not create temporary disk list."
+DISK_LIST_FILTERED=$(mktemp /dev/shm/disklist_filtered.XXXXXX) || failexit 1 "Could not create temporary filtered disk list."
 
 # --- STEP 1: Storage Selection ---
-# Check for jq
-if ! command -v jq &> /dev/null; then
-    failexit 1 "jq is required but not installed. Please run 'apt-get install jq'."
-fi
 
 printf -- "%b" "${L_BLUE}▶ Step 1: Selecting Storages...${NC}\n"
 mapfile -t storages < <(pvesm status | awk 'NR>1 {print $1}')
@@ -127,8 +176,8 @@ echo "--------------------------------------------------------------------------
 global_idx=0
 
 # Parse JSON data and collect disk entries for grouping
-DISK_TMP_RAW="/dev/shm/disklist_tmp_raw"
-rm -f "$DISK_TMP_RAW" "$DISK_LIST_RAW"
+DISK_TMP_RAW=$(mktemp /dev/shm/disklist_tmp_raw.XXXXXX) || failexit 1 "Could not create temporary scan list."
+: > "$DISK_LIST_RAW"
 
 while IFS=$'\t' read -r vmid node status name type_raw; do
 
@@ -150,7 +199,7 @@ while IFS=$'\t' read -r vmid node status name type_raw; do
         for dline in "${disk_arr[@]}"; do
             [[ -z "$dline" ]] && continue
             disk=$(echo "$dline" | cut -d: -f1)
-            size_str=$(echo "$dline" | grep -o "size=[0-9]*[G|M|K|T]*" | cut -d= -f2)
+            size_str=$(echo "$dline" | grep -Eo "size=[0-9]+([KMGT]|[KMGT]B)?" | cut -d= -f2)
             [[ -z "$size_str" ]] && continue
             printf "%s|%s|%s|%s|%s|%s|%s\n" "$node" "$type" "$vmid" "${name:0:24}" "$status" "$disk" "$size_str" >> "$DISK_TMP_RAW"
         done
@@ -182,7 +231,7 @@ while IFS='|' read -r node type vmid name status disk size; do
         nodes_order+=("$node")
     fi
     # append vmid to node's vm list (ensure uniqueness)
-    if [[ ! " ${node_vms[$node]} " =~ " $vmid " ]]; then
+    if [[ " ${node_vms[$node]} " != *" $vmid "* ]]; then
         node_vms[$node]="${node_vms[$node]} $vmid"
     fi
     # append disk line to vm_disks
@@ -214,7 +263,7 @@ for node in "${nodes_order[@]}"; do
     printf "${L_BLUE}${BOLD}Node: %-12s  (%2d disks, %s)${NC}\n" "$node" "$node_total_disks" "$node_total_hr"
 
     # prepare vm list for this node
-    vmids=( ${node_vms[$node]} )
+    read -r -a vmids <<< "${node_vms[$node]}"
     vm_count=${#vmids[@]}
     for j in "${!vmids[@]}"; do
         vmid=${vmids[$j]}
@@ -271,10 +320,6 @@ for node in "${nodes_order[@]}"; do
         done
     done
 done
-
-# cleanup
-rm -f "${DISK_TMP_RAW}.sorted" "$DISK_TMP_RAW"
-
 
 # --- STEP 3: Migration Filters ---
 printf -- "\n%b" "${L_BLUE}▶ Step 3: Select Migration Scope...${NC}\n"
@@ -363,14 +408,14 @@ while read -r idx node type vmid disk size status; do
     # User interaction logic
     if [[ "$mode_sel" == "2" ]]; then
         while true; do
-            printf "${YELLOW}Confirm:${NC} Move [#%s] %s (%s) on Node '%s'? [Y/n]: " "$idx" "$disk" "$size" "$node"
+            printf "${YELLOW}Confirm:${NC} Move [#%s] %s (%s) on Node '%s'? [y/N]: " "$idx" "$disk" "$size" "$node"
             read -r ans < /dev/tty
             ans=$(echo "$ans" | tr '[:upper:]' '[:lower:]')
-            # Allow 'y', 'n', or empty input
-            if [[ -z "$ans" || "$ans" == "y" || "$ans" == "n" ]]; then
+            ans=${ans:-n}
+            if [[ "$ans" == "y" || "$ans" == "n" ]]; then
                 break
             else
-                printf -- "%b" "${RED}Invalid input. Please enter 'y' for yes, 'n' for no, or press Enter for yes.${NC}\n"
+                printf -- "%b" "${RED}Invalid input. Please enter 'y' for yes or 'n' for no.${NC}\n"
             fi
         done
         # If 'n' is entered, skip to the next item
@@ -382,18 +427,32 @@ while read -r idx node type vmid disk size status; do
 
     start_time=$(date +%s)
 
-    # Execute migration via Proxmox API (pvesh) for cluster-wide routing
+    # Execute migration via Proxmox API (pvesh) for cluster-wide routing.
+    # The API returns a UPID when the task is started; poll it so success means
+    # the migration actually completed, not just that the task was submitted.
+    task_output=""
+    api_status=0
     if [[ "$type" == "qm" ]]; then
-        pvesh create /nodes/"$node"/qemu/"$vmid"/move_disk --disk "$disk" --storage "$DEST_STORAGE" --delete 1
+        task_output=$(pvesh create /nodes/"$node"/qemu/"$vmid"/move_disk --disk "$disk" --storage "$DEST_STORAGE" --delete 1 2>&1) || api_status=$?
     else
-        pvesh create /nodes/"$node"/lxc/"$vmid"/move_volume --volume "$disk" --storage "$DEST_STORAGE" --delete 1
+        task_output=$(pvesh create /nodes/"$node"/lxc/"$vmid"/move_volume --volume "$disk" --storage "$DEST_STORAGE" --delete 1 2>&1) || api_status=$?
+    fi
+
+    upid=$(printf "%s\n" "$task_output" | grep -Eo 'UPID:[^"[:space:]]+' | tail -n 1)
+    task_success=0
+    if [[ "$api_status" -eq 0 && -n "$upid" ]] && wait_for_task "$node" "$upid"; then
+        task_success=1
+    elif [[ "$api_status" -eq 0 && -z "$upid" ]]; then
+        printf "${RED}Could not find task UPID in pvesh output:${NC}\n%s\n" "$task_output" | tee -a "$LOG_DONE"
+    else
+        printf "${RED}pvesh failed:${NC}\n%s\n" "$task_output" | tee -a "$LOG_DONE"
     fi
 
     end_time=$(date +%s)
     duration=$((end_time - start_time))
 
-    # Check exit status of the API call and update statistics
-    if [ $? -eq 0 ]; then
+    # Check task status and update statistics
+    if [ "$task_success" -eq 1 ]; then
         printf "${GREEN}${BOLD}✔ Task Finished in %s seconds${NC}\n" "$duration" | tee -a "$LOG_DONE"
         ((SUCCESS_COUNT++))
         TOTAL_TIME_SECONDS=$((TOTAL_TIME_SECONDS + duration))

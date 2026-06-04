@@ -22,6 +22,9 @@ RED=$'\033[0;31m'
 L_BLUE=$'\033[1;34m'
 BOLD=$'\033[1m'
 NC=$'\033[0m' # No Color
+UNUSED_TMP_RAW=""
+ORPHANED_DISK_LIST=""
+ORPHANED_DISK_LIST_FILTERED=""
 
 # --- Script Header ---
 # Prints a decorative header for the script.
@@ -45,42 +48,64 @@ failexit() {
     exit "$1"
 }
 
+cleanup() {
+    rm -f "$UNUSED_TMP_RAW" "${UNUSED_TMP_RAW}.sorted" "$ORPHANED_DISK_LIST" "$ORPHANED_DISK_LIST_FILTERED"
+}
+trap cleanup EXIT
+
+require_commands() {
+    local missing=()
+    local cmd
+    for cmd in "$@"; do
+        command -v "$cmd" >/dev/null 2>&1 || missing+=("$cmd")
+    done
+
+    if [ "${#missing[@]}" -gt 0 ]; then
+        failexit 1 "Missing required command(s): ${missing[*]}"
+    fi
+}
+
 # --- Main Execution ---
 
-# Check if 'jq' is installed, as it is required for parsing JSON output from pvesh.
-if ! command -v jq &> /dev/null; then
-    failexit 1 "jq is required but not installed. Please run 'apt-get install jq'."
-fi
+require_commands jq pvesh ssh awk grep sort mktemp wc cut tr
 
 # --- Cluster-wide Disk Rescan ---
 # To get the most up-to-date storage information, this section rescans all storages on every online node in the cluster.
 printf -- "%b" "${L_BLUE}▶ Rescanning disks on all cluster nodes...${NC}\n"
 
-for NODE in $(pvesh get /nodes --output-format json | jq -r '.[].node'); do
+SSH_OPTS=(-o BatchMode=yes -o ConnectTimeout=10 -o StrictHostKeyChecking=accept-new)
+RESCAN_FAILED=0
+while read -r NODE; do
+  [[ -z "$NODE" ]] && continue
   printf "== ${YELLOW}%s${NC} ==\n" "$NODE"
 
-  ssh root@$NODE '
+  if ! ssh "${SSH_OPTS[@]}" root@"$NODE" '
     echo "[qm] disk rescan"
     qm disk rescan
 
     echo "[pct] rescan"
     pct rescan
-  '
-done
+  '; then
+    RESCAN_FAILED=1
+    printf -- "%b" "${YELLOW}Warning: rescan failed on node '$NODE'. Continuing with available data.${NC}\n"
+  fi
+done < <(pvesh get /nodes --output-format json | jq -r '.[].node')
 
-printf -- "\n%b" "${GREEN}✔ Cluster-wide disk rescan complete.${NC}\n\n"
+if [ "$RESCAN_FAILED" -eq 0 ]; then
+    printf -- "\n%b" "${GREEN}✔ Cluster-wide disk rescan complete.${NC}\n\n"
+else
+    printf -- "\n%b" "${YELLOW}⚠ Cluster-wide disk rescan completed with warnings.${NC}\n\n"
+fi
 
 # Get a list of all resources of type 'vm' (which includes VMs and CTs) in JSON format.
 printf -- "%b" "${L_BLUE}▶ Scanning VM/Container Configurations...${NC}
 "
 GUEST_DATA=$(pvesh get /cluster/resources --type vm --output-format json)
 
-# Define a temporary file to store raw data about unused disks.
+# Define temporary files to store raw data about unused disks.
 # Using /dev/shm (shared memory) is fast as it's a tmpfs.
-UNUSED_TMP_RAW="/dev/shm/unused_list_tmp"
-ORPHANED_DISK_LIST="/dev/shm/orphaned_disk_list"
-# Ensure the temporary file from a previous run is removed.
-rm -f "$UNUSED_TMP_RAW" "$ORPHANED_DISK_LIST"
+UNUSED_TMP_RAW=$(mktemp /dev/shm/unused_list_tmp.XXXXXX) || failexit 1 "Could not create temporary unused disk list."
+ORPHANED_DISK_LIST=$(mktemp /dev/shm/orphaned_disk_list.XXXXXX) || failexit 1 "Could not create temporary orphaned disk list."
 
 # Flags and counters initialization.
 found_unused_in_config=0
@@ -155,7 +180,7 @@ else
         fi
         
         # Append vmid to the node's vm list, ensuring uniqueness.
-        if [[ ! " ${node_vms[$node]} " =~ " $vmid " ]]; then
+        if [[ " ${node_vms[$node]} " != *" $vmid "* ]]; then
             node_vms[$node]="${node_vms[$node]} $vmid"
         fi
         
@@ -184,7 +209,7 @@ else
         printf "${L_BLUE}${BOLD}Node: %-12s  (%2d unused disks)${NC}\n" "$node" "$node_total_disks"
 
         # Get the list of VMIDs for the current node.
-        vmids=( ${node_vms[$node]} )
+        read -r -a vmids <<< "${node_vms[$node]}"
         vm_count=${#vmids[@]}
         
         # Iterate through each VMID associated with the current node.
@@ -295,8 +320,7 @@ else
             done
             
             # --- Deletion Execution ---
-            ORPHANED_DISK_LIST_FILTERED="/dev/shm/orphaned_disk_list_filtered"
-            rm -f "$ORPHANED_DISK_LIST_FILTERED"
+            ORPHANED_DISK_LIST_FILTERED=$(mktemp /dev/shm/orphaned_disk_list_filtered.XXXXXX) || failexit 1 "Could not create temporary filtered deletion list."
 
             # Apply filters to disk list
             while read -r idx node type vmid key vol; do
