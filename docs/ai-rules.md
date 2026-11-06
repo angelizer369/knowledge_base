@@ -27,6 +27,15 @@ Mandatory behavior rules for AI assistants working in this repository.
 - Preserve existing authentication, authorization, tenant/data boundaries, fail-closed behavior and approval requirements for live actions, trading, billing, destructive changes, publication and deployment.
 - Prefer bounded read-only inspection, plans and reversible changes before approved mutations. An uncertain mutation requires reconciliation, not replay; preserve required rollback, evidence and scoped cleanup.
 
+## Instruction-document hygiene
+
+- Keep `AGENTS.md` and other always-loaded instruction documents focused on durable policy, essential repository orientation and concise workflow entrypoints. They are not task journals, release logs or operational status ledgers.
+- Put dated rollout summaries, per-run IDs/hashes/test counts, incident timelines and narrative handoffs in the existing topic/task/checkpoint record, not another always-loaded instruction file. Link to one canonical current record instead of duplicating it; do not create a new record for routine work that does not need one. Respect existing private/ignored evidence locations and confidentiality rules.
+- Durable operator decisions, execution/access boundaries, approval requirements and non-replay rules remain binding instructions even when originally dated. Never classify a safety rule as disposable history merely because it contains a date.
+- When moving transient context, retain a brief visible pointer to each active blocker, uncertainty hold or stop condition in the applicable entrypoint/rule until resolved. Preserve full approval scopes, expiry, exact-byte constraints, consumed claims, failed outcomes and retained evidence in the canonical record; moving text grants no authority, resets no attempt count and permits no replay.
+- Before handing off instruction changes, review every addition: it must be durable policy, necessary orientation or a concise active-hold pointer. Update the existing canonical rule rather than appending parallel rules; consolidate superseded duplication only after checking that no binding constraint is lost and required historical evidence remains retained. Verify affected links and instruction indexes.
+- This hygiene rule does not authorize broad cleanup, evidence deletion, edits to historical worktree/vendor snapshots or weaker safety/validation gates. It is a review requirement, not a hard size limit or permission to hide unresolved risks.
+
 ## No-progress circuit breaker
 
 - Before costly review, builds, validation or deployment, define observable completion criteria and check prerequisites with bounded, authorized read-only preflight: access, current state, required approvals and an approved validation path. Do not start a workflow with a known unmet prerequisite.
